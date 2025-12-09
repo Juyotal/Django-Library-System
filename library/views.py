@@ -4,6 +4,7 @@ from .models import Author, Book, Member, Loan
 from .serializers import AuthorSerializer, BookSerializer, MemberSerializer, LoanSerializer
 from rest_framework.decorators import action
 from django.utils import timezone
+from django.db import models
 from .tasks import send_loan_notification
 
 class AuthorViewSet(viewsets.ModelViewSet):
@@ -49,6 +50,50 @@ class MemberViewSet(viewsets.ModelViewSet):
     queryset = Member.objects.all()
     serializer_class = MemberSerializer
 
+    @action(detail=False, methods=['get'], url_path='top-active')
+    def top_members(self, request):
+        num_active_loans = models.Count('loans', filter=models.Q(loans__is_returned=False))
+        top_active_members = Member.objects.annotate(
+            num_active_loans=num_active_loans
+        ).filter(num_active_loans__gt=0).order_by('-num_active_loans')[:5]
+
+        result = []
+        for member in top_active_members:
+            result.append({
+                'id': member.id,
+                'username': member.user.username,
+                'email': member.user.email,
+                'active_loans': member.num_active_loans,
+            })
+
+        return Response({'status': 'Success.', 'data': result}, status=status.HTTP_200_OK)
+
 class LoanViewSet(viewsets.ModelViewSet):
     queryset = Loan.objects.all()
     serializer_class = LoanSerializer
+
+    @action(detail=True, methods=['post'])
+    def extend_due_date(self, request, pk):
+        loan = self.get_object()
+        today = timezone.now().date()
+
+        if loan.is_returned:
+            return Response({'error': 'Can not Extend Returned Loan.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if loan.due_date < today:
+            return Response({'error': 'Can not Extend Overdue Loan.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            add_days = int(request.data.get("additional_days", ""))
+        except ValueError:
+            return Response({'error': 'Invalid additional_days Value.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if add_days <= 0:
+            return Response({'error': 'additional_days Should be a +ve integer'}, status=status.HTTP_400_BAD_REQUEST)
+
+        loan.extend(add_days)
+        serializer = self.get_serializer(loan)
+        return Response(
+            {'status': f'Successfully Extended Loan by {add_days}', 'data': serializer.data},
+            status=status.HTTP_200_OK
+        )

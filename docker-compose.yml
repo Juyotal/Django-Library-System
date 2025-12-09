@@ -10,7 +10,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"
 
   redis:
     image: redis:6
@@ -33,6 +33,17 @@ services:
   celery:
     build: .
     command: celery -A library_system worker -l info
+    volumes:
+      - .:/code
+    env_file:
+      - .env
+    depends_on:
+      - web
+      - redis
+
+  celery-beat:
+    build: .
+    command: celery -A library_system beat -l info
     volumes:
       - .:/code
     env_file:
